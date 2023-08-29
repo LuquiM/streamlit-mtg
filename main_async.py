@@ -2,8 +2,6 @@
 # Dev: Lucca Mariano
 
 # Imports ---------------------------------------------------------
-
-from utils import *
 from bs4 import BeautifulSoup
 import pandas as pd
 from collections import defaultdict
