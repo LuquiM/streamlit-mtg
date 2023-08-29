@@ -15,6 +15,7 @@ from tqdm.asyncio import tqdm_asyncio
 import streamlit as st
 from stqdm import stqdm
 import base64
+import requests
 # Variables -------------------------------------------------------
 store_dict = {'https://www.bazardebagda.com.br/': 'Bazar',
               'https://www.cardtutor.com.br/': 'Card Tutor',
