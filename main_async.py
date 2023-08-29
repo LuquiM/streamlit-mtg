@@ -1,7 +1,10 @@
 # Script para consulta em massa de cartas MTG nas lojas que gosto.
 # Dev: Lucca Mariano
+import random
 
 # Imports ---------------------------------------------------------
+import random
+import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 from collections import defaultdict
@@ -11,11 +14,9 @@ import asyncio
 import aiohttp
 import time
 from aiolimiter import AsyncLimiter
-from tqdm.asyncio import tqdm_asyncio
 import streamlit as st
 from stqdm import stqdm
-import base64
-import requests
+import json
 # Variables -------------------------------------------------------
 store_dict = {'https://www.bazardebagda.com.br/': 'Bazar',
               'https://www.cardtutor.com.br/': 'Card Tutor',
@@ -50,11 +51,19 @@ def _draw_as_table(df, pagesize):
     ax.axis('tight')
     ax.axis('off')
     colors = []
+    sum_min = 0
     for line_number, (_, row) in enumerate(df.iterrows()):
         colors_in_column = alternating_colors[line_number].copy()
         loja_dict = row[row != 0.0].to_dict()
-        del loja_dict['Liga Magic']
-        loja_name = min(loja_dict, key=loja_dict.get)
+        try:
+            del loja_dict['Liga Magic']
+        except KeyError:
+            pass
+        try:
+            loja_name = min(loja_dict, key=loja_dict.get)
+        except:
+            loja_name = random.choice(list(row.index))
+        sum_min += float(row[loja_name])
         loja_index = df.columns.tolist().index(f'{loja_name}')
         colors_in_column[loja_index] = 'g'
         colors.append(colors_in_column)
@@ -65,7 +74,7 @@ def _draw_as_table(df, pagesize):
                          colColours=['lightblue'] * len(df.columns),
                          cellColours=colors,
                          loc='center')
-    return fig
+    return fig, sum_min
 
 
 def dataframe_to_pdf(df, filename, numpages=(1, 1), pagesize=(11, 8.5), path=''):
@@ -77,7 +86,7 @@ def dataframe_to_pdf(df, filename, numpages=(1, 1), pagesize=(11, 8.5), path='')
             for j in range(0, nv):
                 page = df.iloc[(i * rows_per_page):min((i + 1) * rows_per_page, len(df)),
                        (j * cols_per_page):min((j + 1) * cols_per_page, len(df.columns))]
-                fig = _draw_as_table(page, pagesize)
+                fig, sum_min = _draw_as_table(page, pagesize)
                 if nh > 1 or nv > 1:
                     # Add a part/page number at bottom-center of page
                     fig.text(0.5, 0.5 / pagesize[0],
@@ -85,27 +94,42 @@ def dataframe_to_pdf(df, filename, numpages=(1, 1), pagesize=(11, 8.5), path='')
                              ha='center', fontsize=8)
                 pdf.savefig(fig, bbox_inches='tight')
                 fig.savefig(filename)
-                return pdf, fig
+                return pdf, fig, sum_min
 
-async def get_html_info(store_website: str, card: str, semaphore) -> str:
-    url = f'{store_website}?view=ecom%2Fitens&id=82238&searchExactMatch=&busca={"+".join(card.strip("").split(" "))}'
-    async with aiohttp.ClientSession(headers=headers) as session:
-        await semaphore.acquire()
-        async with limiter:
-            async with session.get(url) as resp:
-                content = await resp.read()
-                semaphore.release()
-                return content
+async def get_html_info(store_website: str, card: str, semaphore, tries=0) -> str:
+    url = f'{store_website}?view=ecom%2Fitens&id=82238&searchExactMatch=&busca={"+".join(card.strip("").split(" "))}' \
+          f'&txt_limit=120&txt_estoque=1'
+    while True and tries < 10:
+        try:
+            async with aiohttp.ClientSession(headers=headers, trust_env=True) as session:
+                await semaphore.acquire()
+                async with limiter:
+                    async with session.get(url) as resp:
+                        content = await resp.read()
+                        semaphore.release()
+                        return content
+        except (aiohttp.ServerDisconnectedError, aiohttp.ClientResponseError,
+                aiohttp.ClientConnectorError) as s:
+            await asyncio.sleep(1)
+            tries += 1
 
-async def get_html_info_liga(card: str, semaphore) -> str:
+
+async def get_html_info_liga(card: str, semaphore, tries=0) -> str:
     url = f'https://www.ligamagic.com.br/?view=cards/card&card={"+".join(card.strip("").split(" "))}'
-    async with aiohttp.ClientSession(headers=headers) as session:
-        await semaphore.acquire()
-        async with limiter:
-            async with session.get(url) as resp:
-                content = await resp.read()
-                semaphore.release()
-                return content
+    while True and tries < 10:
+        try:
+            async with aiohttp.ClientSession(headers=headers, trust_env=True) as session:
+                await semaphore.acquire()
+                async with limiter:
+                    async with session.get(url) as resp:
+                        content = await resp.read()
+                        semaphore.release()
+                        return content
+        except (aiohttp.ServerDisconnectedError, aiohttp.ClientResponseError,
+                aiohttp.ClientConnectorError) as s:
+            await asyncio.sleep(1)
+            tries += 1
+
 
 async def treat_html_liga(card: str, semaphore):
     content = await get_html_info_liga(card, semaphore)
@@ -122,14 +146,19 @@ async def process(store_name, content: str, card: str) -> dict:
     _soup = BeautifulSoup(content, "lxml")
     if _soup.find(lambda tag: tag.name == 'div' and
                               tag.get('class') == ['cards']):
-        url_base = _soup.find("meta", property="og:url")['content'].split('/', 3)[0:3]
-        url_base.remove('')
-        start_url_new = "//".join(url_base) + '/'
-        end_url_new = \
-            _soup.find('div', {'class': 'card-item'}).find('div', {'class': 'title'}).find('a')['href'].split('/',
-                                                                                                              1)[-1]
-        url_new = start_url_new + end_url_new
-        _soup = BeautifulSoup(requests.get(f'{url_new}', headers={'User-Agent': 'Custom'}).text, 'lxml')
+        for card_item in _soup.find_all(lambda tag: tag.name == 'div' and
+                              tag.get('class') == ['card-item']):
+            if not any(text in card_item.find('div', {'class': 'title'}).text.lower() for text in {'(art card', '//'}):
+                url_base = _soup.find("meta", property="og:url")['content'].split('/', 3)[0:3]
+                url_base.remove('')
+                start_url_new = "//".join(url_base) + '/'
+                end_url_new = \
+                    card_item.find('div', {'class': 'title'}).find('a')['href'].split(
+                        '/',
+                        1)[-1]
+                url_new = start_url_new + end_url_new
+                _soup = BeautifulSoup(requests.get(f'{url_new}', headers={'User-Agent': 'Custom'}).text, 'lxml')
+                break
     _prices_divs = _soup.find_all("div", {"class": "table-cards-row"})
     _price_set = set()
     for _price_text in _prices_divs:
@@ -160,29 +189,38 @@ async def process(store_name, content: str, card: str) -> dict:
 
 async def process_liga(html, card):
     _soup = BeautifulSoup(html, "lxml")
-    _price_text = _soup.find("div",
-                             {"class": "row bloco-preco-superior", "title": "Preço Médio card Normal (Sem extras)"}) \
-        .find("div", {"class": "col-prc col-prc-menor"}).text.strip().lstrip("R$").strip()
-    try:
-        price = float(_price_text.replace('.', '').replace(',', '.'))
-    except:
-        price = 0
+    _price_segment = _soup.find_all('script', {'type': 'text/javascript'})
+    price = 0
+    for _price_text in _price_segment:
+        if "avgprice='" in _price_text.text:
+            try:
+                price_dict = json.loads(_price_text.text.split("avgprice='")[-1].strip(";|,|'"))
+                list_of_prices = [v for _, v in price_dict.items()]
+                for dict_price in list_of_prices:
+                    if "extras" in dict_price:
+                        list_of_prices.extend([v for v in dict_price['extras'].copy().values()])
+                        del dict_price['extras']
+                prices = {price['precoMenor'] for price in list_of_prices}
+                prices.discard(0)
+                price = min(prices)
+            except:
+                pass
+            break
     nome_carta = card
     card_dict = defaultdict()
-    card_dict['Carta'] = nome_carta
+    card_dict['Carta'] = card
     card_dict[f'Liga Magic'] = price
     return card_dict
 
-
 async def get_card_list(card_set: set, store_name, store_website: str) -> list:
-    semaphore = asyncio.Semaphore(value=10)
+    semaphore = asyncio.Semaphore(value=5)
     tasks = [treat_html(store_name, store_website, card, semaphore) for card in card_set]
     card_list = await stqdm.gather(*tasks)
     return card_list
 
 
 async def get_card_list_liga(card_set: set) -> list:
-    semaphore = asyncio.Semaphore(value=10)
+    semaphore = asyncio.Semaphore(value=5)
     tasks = [treat_html_liga(card, semaphore) for card in card_set]
     card_list = await stqdm.gather(*tasks)
     return card_list
@@ -204,7 +242,7 @@ def read_deck_file(file: str):
 def create_output_folder(path: str):
     Path(f"{path}").mkdir(parents=True, exist_ok=True)
 
-def main_module(card_input:str, checkbox_list:list, nome_deck):
+def main_module(card_input:str, checkbox_list:list):
     store_dict = {'https://www.bazardebagda.com.br/': 'Bazar',
                   'https://www.cardtutor.com.br/': 'Card Tutor',
                   'https://www.chq.com.br/': 'CHQ',
@@ -214,10 +252,12 @@ def main_module(card_input:str, checkbox_list:list, nome_deck):
                   'https://www.medievalcards.com.br/': 'Medieval'
                   }
     card_set = {''.join([i for i in line if not i.isdigit()]).strip() for line in card_input.split('\n')}
+    card_set.discard('')
     store_dict_input = defaultdict()
     for idx, (k, v) in enumerate(store_dict.items()):
         if checkbox_list[idx]:
             store_dict_input[f'{k}'] = v
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     card_list = asyncio.run(main(store_dict_input, card_set))
     df_list = [pd.DataFrame(df).set_index('Carta') for df in card_list]
     column_names = list(store_dict_input.values())
@@ -225,11 +265,13 @@ def main_module(card_input:str, checkbox_list:list, nome_deck):
     df_raw = pd.DataFrame(index=list(card_set), columns=column_names)
     for df in df_list:
         df_raw.update(df)
-    df_raw = df_raw.sort_values('Bazar', ascending=False)
+    df_raw = df_raw.sort_values('Liga Magic', ascending=False)
     df_raw.loc['Total', :] = df_raw.sum(axis=0)
-    pdf, fig = dataframe_to_pdf(df_raw, f'{nome_deck}.pdf', path=path)
+    pdf, fig, sum_min = dataframe_to_pdf(df_raw, f'Deck.pdf', path=path)
     st.dataframe(df_raw)
+    st.write(f'Caso compre as cartas mais baratas de cada loja, seu deck custará R$ {sum_min}.')
     st.pyplot(fig)
+
 
 
 if __name__ == "__main__":
@@ -237,6 +279,7 @@ if __name__ == "__main__":
     path = 'Decks/Tom Bombadil'
     create_output_folder(path)
     card_set = read_deck_file('deck.mtg')
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     card_list = asyncio.run(main(store_dict, card_set))
     df_list = [pd.DataFrame(df).set_index('Carta') for df in card_list]
     column_names = list(store_dict.values())
