@@ -269,7 +269,7 @@ def main_module(card_input:str, checkbox_list:list):
     df_raw.loc['Total', :] = df_raw.sum(axis=0)
     pdf, fig, sum_min = dataframe_to_pdf(df_raw, f'Deck.pdf', path=path)
     st.dataframe(df_raw)
-    st.write(f'Caso compre as cartas mais baratas de cada loja, seu deck custará R$ {sum_min}.')
+    st.write(f'Comprando cada carta na loja mais barata detectada, seu deck custará R$ {sum_min}.')
     st.pyplot(fig)
 
 
