@@ -52,7 +52,7 @@ def _draw_as_table(df, pagesize):
     ax.axis('off')
     colors = []
     sum_min = 0
-    for line_number, (_, row) in enumerate(df.iterrows()):
+    for line_number, (idx, row) in enumerate(df.iterrows()):
         colors_in_column = alternating_colors[line_number].copy()
         loja_dict = row[row != 0.0].to_dict()
         try:
@@ -63,7 +63,10 @@ def _draw_as_table(df, pagesize):
             loja_name = min(loja_dict, key=loja_dict.get)
         except:
             loja_name = random.choice(list(row.index))
-        sum_min += float(row[loja_name])
+        min_price = float(row[loja_name])
+        if idx == 'Total':
+            min_price = 0
+        sum_min += min_price
         loja_index = df.columns.tolist().index(f'{loja_name}')
         colors_in_column[loja_index] = 'g'
         colors.append(colors_in_column)
@@ -257,6 +260,7 @@ def main_module(card_input:str, checkbox_list:list):
     for idx, (k, v) in enumerate(store_dict.items()):
         if checkbox_list[idx]:
             store_dict_input[f'{k}'] = v
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     card_list = asyncio.run(main(store_dict_input, card_set))
     df_list = [pd.DataFrame(df).set_index('Carta') for df in card_list]
     column_names = list(store_dict_input.values())
