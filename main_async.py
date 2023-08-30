@@ -257,7 +257,6 @@ def main_module(card_input:str, checkbox_list:list):
     for idx, (k, v) in enumerate(store_dict.items()):
         if checkbox_list[idx]:
             store_dict_input[f'{k}'] = v
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     card_list = asyncio.run(main(store_dict_input, card_set))
     df_list = [pd.DataFrame(df).set_index('Carta') for df in card_list]
     column_names = list(store_dict_input.values())
