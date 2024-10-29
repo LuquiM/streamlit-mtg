@@ -180,6 +180,7 @@ async def process(store_name, content: str, card: str) -> dict:
         card_dict = defaultdict()
         card_dict['Carta'] = card
         try:
+            _price_set.remove(0)
             card_dict[f'{store_name}'] = sorted(_price_set)[0]
         except:
             card_dict[f'{store_name}'] = _price = 0
