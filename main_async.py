@@ -17,6 +17,7 @@ from aiolimiter import AsyncLimiter
 import streamlit as st
 from stqdm import stqdm
 import json
+from pathlib import Path
 # Variables -------------------------------------------------------
 store_dict = {'https://www.bazardebagda.com.br/': 'Bazar',
               'https://www.cardtutor.com.br/': 'Card Tutor',
@@ -30,9 +31,7 @@ store_dict = {'https://www.bazardebagda.com.br/': 'Bazar',
 path = 'Decks/Tom Bombadil'
 deck = 'Tom Bombadil'
 
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/'
-                  '39.0.2171.95 Safari/537.36'}
+headers = {'User-Agent': 'Mozilla'}
 
 # Sub-Main --------------------------------------------------------
 limiter = AsyncLimiter(40, 0.125)
@@ -164,30 +163,28 @@ async def process(store_name, content: str, card: str) -> dict:
                 break
     _prices_divs = _soup.find_all("div", {"class": "table-cards-row"})
     _price_set = set()
-    for _price_text in _prices_divs:
-        if '0' not in _price_text.find(lambda tag: tag.name == 'div' and
-                                                   tag.get('class') == ['table-cards-body-cell']).text:
+    try:
+        for _price_text in _prices_divs:
             try:
-                _text = _price_text.find('div', {'class': 'preco_com_desconto'}).find('font', {
-                    'color': 'red'}).text.strip().lstrip(
+                _text = _price_text.find_all('div', {'class':'title-mobile'})[-1].nextSibling.text.lstrip(
                     'R$').strip()
             except:
                 _text = _price_text.find('div', {'class': 'table-cards-body-cell card-preco'}).text.strip().lstrip(
                     'R$').strip()
                 _text = "".join(letter for letter in _text if letter.isdigit() or letter in {'.', ','})
-        else:
-            continue
+            try:
+                _price = float(_text.split('R$')[-1].replace('.', '').replace(',', '.'))
+            except:
+                _price = 0
+            _price_set.add(_price)
+        card_dict = defaultdict()
+        card_dict['Carta'] = card
         try:
-            _price = float(_text.replace('.', '').replace(',', '.'))
+            card_dict[f'{store_name}'] = sorted(_price_set)[0]
         except:
-            _price = 0
-        _price_set.add(_price)
-    card_dict = defaultdict()
-    card_dict['Carta'] = card
-    try:
-        card_dict[f'{store_name}'] = sorted(_price_set)[0]
+            card_dict[f'{store_name}'] = _price = 0
     except:
-        card_dict[f'{store_name}'] = _price = 0
+        pass
     return card_dict
 
 async def process_liga(html, card):
@@ -280,7 +277,7 @@ if __name__ == "__main__":
     start_time = time.time()
     path = 'Decks/Tom Bombadil'
     create_output_folder(path)
-    card_set = read_deck_file('deck.mtg')
+    card_set = read_deck_file(f'{path}/deck.mtg')
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     card_list = asyncio.run(main(store_dict, card_set))
     df_list = [pd.DataFrame(df).set_index('Carta') for df in card_list]
